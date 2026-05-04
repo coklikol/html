@@ -1,1 +1,199 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Telegram Bot Panel</title>
+    <style>
+        body { font-family: Arial, sans-serif; max-width: 800px; margin: 20px auto; padding: 20px; }
+        input, textarea, button { width: 100%; padding: 12px; margin: 10px 0; box-sizing: border-box; }
+        button { background: #0088cc; color: white; border: none; cursor: pointer; font-size: 16px; }
+        button:disabled { background: #ccc; cursor: not-allowed; }
+        .status { padding: 10px; margin: 10px 0; border-radius: 5px; }
+        .success { background: #d4edda; color: #155724; }
+        .error { background: #f8d7da; color: #721c24; }
+        #messages { max-height: 400px; overflow-y: auto; border: 1px solid #ddd; padding: 15px; background: #f9f9f9; }
+        .message { margin: 10px 0; padding: 10px; border-left: 4px solid #0088cc; background: white; }
+        .message.from-user { border-left-color: #28a745; }
+        .message.from-bot { border-left-color: #ffc107; }
+        .controls { display: flex; gap: 10px; margin: 10px 0; }
+        .controls button { flex: 1; min-width: 120px; }
+        #messageId { font-weight: bold; color: #0088cc; margin: 10px 0; }
+        .clear-btn { background: #dc3545 !important; }
+    </style>
+</head>
+<body>
+    <h1>🤖 Telegram Bot Панель</h1>
+    
+    <input type="number" id="chatId" value="5407825036" placeholder="Chat ID">
+    <textarea id="message" rows="3" placeholder="Введите сообщение...">тест</textarea>
+    
+    <div class="controls">
+        <button onclick="sendMessage()">📤 Отправить</button>
+        <button onclick="editMessage()" id="editBtn" disabled>✏️ Редактировать</button>
+        <button onclick="getUpdates()" class="clear-btn">🔄 Обновить сообщения</button>
+        <button onclick="clearMessages()" class="clear-btn">🗑️ Очистить</button>
+    </div>
+    
+    <div id="status"></div>
+    <div id="messageId"></div>
+    
+    <h3>📋 История сообщений:</h3>
+    <div id="messages"></div>
 
+    <script>
+        const BOT_TOKEN = '6639181665:AAF98IaosMehuMvoKy3vqw5KbudGw96R9jk';
+        const API_URL = `https://api.telegram.org/bot${BOT_TOKEN}`;
+        let currentMessageId = null;
+        let updateOffset = 0;
+        let messages = [];
+
+        async function showStatus(text, isError = false) {
+            const status = document.getElementById('status');
+            status.textContent = text;
+            status.className = `status ${isError ? 'error' : 'success'}`;
+        }
+
+        async function apiCall(method, params = {}) {
+            const response = await fetch(`${API_URL}/${method}`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(params)
+            });
+            return response.json();
+        }
+
+        async function sendMessage() {
+            const chatId = document.getElementById('chatId').value;
+            const text = document.getElementById('message').value;
+            
+            if (!chatId || !text) {
+                showStatus('Заполните все поля!', true);
+                return;
+            }
+
+            try {
+                showStatus('Отправка...');
+                document.querySelector('button[onclick="sendMessage()"]').disabled = true;
+
+                const data = await apiCall('sendMessage', {
+                    chat_id: chatId,
+                    text: text
+                });
+                
+                if (data.ok) {
+                    currentMessageId = data.result.message_id;
+                    document.getElementById('messageId').textContent = 
+                        `Текущее сообщение ID: ${currentMessageId}`;
+                    document.getElementById('editBtn').disabled = false;
+                    showStatus('✅ Сообщение отправлено!');
+                    getUpdates(); // Обновляем историю
+                } else {
+                    throw new Error(data.description);
+                }
+            } catch (error) {
+                showStatus('❌ Ошибка: ' + error.message, true);
+            } finally {
+                document.querySelector('button[onclick="sendMessage()"]').disabled = false;
+            }
+        }
+
+        async function editMessage() {
+            if (!currentMessageId) return;
+
+            const chatId = document.getElementById('chatId').value;
+            const text = document.getElementById('message').value;
+
+            try {
+                showStatus('Обновление...');
+                document.getElementById('editBtn').disabled = true;
+
+                const data = await apiCall('editMessageText', {
+                    chat_id: chatId,
+                    message_id: currentMessageId,
+                    text: text
+                });
+                
+                if (data.ok) {
+                    showStatus('✅ Сообщение обновлено!');
+                    getUpdates();
+                } else {
+                    throw new Error(data.description);
+                }
+            } catch (error) {
+                showStatus('❌ Ошибка: ' + error.message, true);
+            } finally {
+                document.getElementById('editBtn').disabled = false;
+            }
+        }
+
+        async function getUpdates() {
+            try {
+                showStatus('Загрузка сообщений...');
+                
+                const data = await apiCall('getUpdates', {
+                    offset: updateOffset,
+                    limit: 50,
+                    timeout: 10
+                });
+                
+                if (data.ok && data.result.length > 0) {
+                    data.result.forEach(update => {
+                        if (update.message) {
+                            const msg = update.message;
+                            if (!messages.some(m => m.update_id === update.update_id)) {
+                                messages.unshift({
+                                    update_id: update.update_id,
+                                    message_id: msg.message_id,
+                                    from: msg.from ? `${msg.from.first_name || ''} ${msg.from.last_name || ''}`.trim() || msg.from.username || 'Unknown' : 'Bot',
+                                    text: msg.text || '[Медиа]',
+                                    date: new Date(msg.date * 1000).toLocaleString('ru-RU'),
+                                    is_bot: msg.from?.is_bot || false
+                                });
+                            }
+                        }
+                        updateOffset = update.update_id + 1;
+                    });
+                    displayMessages();
+                    showStatus(`✅ Загружено ${data.result.length} новых сообщений`);
+                } else {
+                    showStatus('ℹ️ Новых сообщений нет');
+                }
+            } catch (error) {
+                showStatus('❌ Ошибка загрузки: ' + error.message, true);
+            }
+        }
+
+        function displayMessages() {
+            const container = document.getElementById('messages');
+            container.innerHTML = messages.slice(0, 50).map(msg => `
+                <div class="message ${msg.is_bot ? 'from-bot' : 'from-user'}">
+                    <strong>${msg.from}</strong> 
+                    <small style="float:right; color:#666;">${msg.date}</small><br>
+                    <span style="word-break: break-word;">${msg.text}</span>
+                </div>
+            `).join('');
+            container.scrollTop = 0;
+        }
+
+        function clearMessages() {
+            messages = [];
+            updateOffset = 0;
+            displayMessages();
+            showStatus('🗑️ История очищена');
+        }
+
+        // Автообновление каждые 10 сек
+        setInterval(getUpdates, 10000);
+
+        // Инициализация
+        getUpdates();
+
+        // Горячие клавиши
+        document.addEventListener('keypress', function(e) {
+            if (e.key === 'Enter' && e.ctrlKey) sendMessage();
+            if (e.key === 'r' && e.ctrlKey) getUpdates();
+        });
+    </script>
+</body>
+</html>
